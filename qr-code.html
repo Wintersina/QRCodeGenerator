@@ -227,6 +227,13 @@
             min-height: 340px;
             border: 2px solid #f0f0f0;
         }
+        #qrcode canvas,
+        #qrcode img {
+            max-width: 100%;
+            max-height: 340px;
+            height: auto;
+            width: auto;
+        }
         .placeholder {
             color: #9ca3af;
             font-size: 15px;
@@ -261,7 +268,7 @@
     <div class="container">
         <div class="input-group">
             <label for="urlInput">Enter URL to Encode</label>
-            <input type="text" id="urlInput" placeholder="https://example.com/your-link" value="https://media-cdn.getbento.com/accounts/6598404a8215df78b5952fb0b323d249/media/kYveXKtLTRqw0C0iudUu_Ehsani-s%20Hot%20Kabob%20Menu.pdf">
+            <input type="text" id="urlInput" placeholder="https://example.com/your-link" value="https://google.com">
         </div>
 
         <div class="input-group">
@@ -356,6 +363,74 @@
             return tempCanvas;
         }
 
+        function detectLogoShape(img) {
+            // Create temporary canvas to analyze the image
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = img.width;
+            tempCanvas.height = img.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.drawImage(img, 0, 0);
+            
+            const imageData = tempCtx.getImageData(0, 0, img.width, img.height);
+            const data = imageData.data;
+            
+            // Check aspect ratio first
+            const aspectRatio = img.width / img.height;
+            const isSquareish = aspectRatio > 0.85 && aspectRatio < 1.15;
+            
+            if (!isSquareish) {
+                return 'rectangle'; // Clearly rectangular
+            }
+            
+            // For square-ish images, check if edges form a circle
+            const centerX = img.width / 2;
+            const centerY = img.height / 2;
+            const radius = Math.min(img.width, img.height) / 2;
+            
+            let circularEdgeCount = 0;
+            let totalSamples = 0;
+            const sampleAngles = 16; // Sample 16 points around the circle
+            
+            for (let i = 0; i < sampleAngles; i++) {
+                const angle = (i / sampleAngles) * Math.PI * 2;
+                
+                // Check points along the radius at different distances
+                for (let r = 0.7; r <= 0.95; r += 0.05) {
+                    const x = Math.floor(centerX + Math.cos(angle) * radius * r);
+                    const y = Math.floor(centerY + Math.sin(angle) * radius * r);
+                    
+                    if (x >= 0 && x < img.width && y >= 0 && y < img.height) {
+                        const index = (y * img.width + x) * 4;
+                        const alpha = data[index + 3];
+                        
+                        totalSamples++;
+                        if (alpha > 128) { // Opaque enough
+                            circularEdgeCount++;
+                        }
+                    }
+                }
+                
+                // Check slightly outside the circle
+                const outerX = Math.floor(centerX + Math.cos(angle) * radius * 1.05);
+                const outerY = Math.floor(centerY + Math.sin(angle) * radius * 1.05);
+                
+                if (outerX >= 0 && outerX < img.width && outerY >= 0 && outerY < img.height) {
+                    const index = (outerY * img.width + outerX) * 4;
+                    const alpha = data[index + 3];
+                    
+                    totalSamples++;
+                    if (alpha < 128) { // Transparent outside
+                        circularEdgeCount++;
+                    }
+                }
+            }
+            
+            const circularPercentage = circularEdgeCount / totalSamples;
+            
+            // If more than 70% of samples suggest circular pattern, it's a circle
+            return circularPercentage > 0.7 ? 'circle' : 'square';
+        }
+
         function addLogoToCanvas(canvas, imgDataUrl) {
             return new Promise((resolve, reject) => {
                 const ctx = canvas.getContext('2d');
@@ -365,28 +440,64 @@
                     try {
                         const processedLogo = removeWhiteBackground(logo);
                         
+                        // Detect logo shape
+                        const shape = detectLogoShape(logo);
+                        
                         // Get logo size from slider (convert percentage to decimal)
                         const logoSizePercent = document.getElementById('logoSize').value / 100;
                         const logoSize = canvas.width * logoSizePercent;
                         
-                        const x = (canvas.width - logoSize) / 2;
-                        const y = (canvas.height - logoSize) / 2;
                         const centerX = canvas.width / 2;
                         const centerY = canvas.height / 2;
-                        const radius = logoSize / 2;
                         
-                        // Always use white background for logo
+                        // Calculate dimensions maintaining aspect ratio
+                        let drawWidth, drawHeight;
+                        const logoAspect = logo.width / logo.height;
+                        
+                        if (logoAspect > 1) {
+                            drawWidth = logoSize;
+                            drawHeight = logoSize / logoAspect;
+                        } else {
+                            drawHeight = logoSize;
+                            drawWidth = logoSize * logoAspect;
+                        }
+                        
+                        const x = centerX - drawWidth / 2;
+                        const y = centerY - drawHeight / 2;
+                        
+                        // Draw background based on detected shape
                         ctx.fillStyle = '#ffffff';
-                        ctx.beginPath();
-                        ctx.arc(centerX, centerY, radius + 5, 0, 2 * Math.PI);
-                        ctx.fill();
                         
-                        ctx.save();
-                        ctx.beginPath();
-                        ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
-                        ctx.clip();
-                        ctx.drawImage(processedLogo, x, y, logoSize, logoSize);
-                        ctx.restore();
+                        if (shape === 'circle') {
+                            // Circular background and clipping
+                            const radius = Math.max(drawWidth, drawHeight) / 2;
+                            ctx.beginPath();
+                            ctx.arc(centerX, centerY, radius + 10, 0, 2 * Math.PI);
+                            ctx.fill();
+                            
+                            ctx.save();
+                            ctx.beginPath();
+                            ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+                            ctx.clip();
+                            ctx.drawImage(processedLogo, x, y, drawWidth, drawHeight);
+                            ctx.restore();
+                        } else {
+                            // Rounded rectangle background (for square/rectangle)
+                            const padding = 10;
+                            const radius = shape === 'square' ? 12 : 8;
+                            ctx.beginPath();
+                            ctx.roundRect(
+                                x - padding, 
+                                y - padding, 
+                                drawWidth + padding * 2, 
+                                drawHeight + padding * 2, 
+                                radius
+                            );
+                            ctx.fill();
+                            
+                            // Draw the logo maintaining its original shape
+                            ctx.drawImage(processedLogo, x, y, drawWidth, drawHeight);
+                        }
                         
                         resolve();
                     } catch (error) {
@@ -466,8 +577,6 @@
                     // Convert canvas to image and display it (same as download)
                     const imgElement = document.createElement('img');
                     imgElement.src = canvas.toDataURL();
-                    imgElement.style.maxWidth = '100%';
-                    imgElement.style.height = 'auto';
                     
                     // Replace canvas with image for display
                     document.getElementById('qrcode').innerHTML = '';
